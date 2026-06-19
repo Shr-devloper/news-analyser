@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{{ report.title }}</title>
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --brand:#4f46e5; --line:#e2e8f0; --bg:#f8fafc; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); margin: 0; background: var(--bg); line-height: 1.55; }
+  .page { max-width: 860px; margin: 0 auto; padding: 40px 28px; background:#fff; }
+  header { border-bottom: 4px solid var(--brand); padding-bottom: 18px; margin-bottom: 26px; }
+  header .kicker { color: var(--brand); font-weight: 700; letter-spacing: .12em;
+                   text-transform: uppercase; font-size: 12px; }
+  h1 { font-size: 30px; margin: 6px 0 4px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 20px; margin: 34px 0 14px; border-left: 4px solid var(--brand);
+       padding-left: 10px; }
+  .exec { background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 12px;
+          padding: 18px 20px; font-size: 15px; }
+  .story { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .story:last-child { border-bottom: none; }
+  .story .top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .story h3 { font-size: 16px; margin: 0; }
+  .badge { background: var(--brand); color: #fff; border-radius: 999px;
+           font-size: 11px; padding: 2px 10px; white-space: nowrap; }
+  .cat { color: var(--brand); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+  .twoline { color: #334155; font-size: 14px; margin: 6px 0; }
+  .takeaways { margin: 6px 0 0 18px; font-size: 13px; color: #475569; }
+  a { color: var(--brand); text-decoration: none; }
+  .chips span { display:inline-block; background:#eef2ff; color:#3730a3; border-radius:999px;
+                padding:4px 10px; font-size:12px; margin:3px 4px 0 0; }
+  .watch li { margin: 4px 0; }
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
+           color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="kicker">AI News Intelligence Agent</div>
+    <h1>{{ report.title }}</h1>
+    <div class="meta">
+      Generated {{ data.generated_at }} ·
+      {{ data.stats.events }} events analyzed · avg importance {{ data.stats.avg_score }}
+    </div>
+  </header>
+
+  <section>
+    <h2>Executive Summary</h2>
+    <div class="exec">{{ data.executive_summary }}</div>
+  </section>
+
+  {% for section, items in data.sections.items() %}
+    {% if items %}
+    <section>
+      <h2>{{ section }}</h2>
+      {% for item in items %}
+      <div class="story">
+        <div class="top">
+          <h3>{{ loop.index }}. {{ item.headline }}</h3>
+          {% if item.score %}<span class="badge">{{ item.score }}</span>{% endif %}
+        </div>
+        <div class="cat">{{ item.category }} · {{ item.publishers }} publisher(s)</div>
+        {% if item.two_line %}<p class="twoline">{{ item.two_line }}</p>{% endif %}
+        {% if item.key_takeaways %}
+        <ul class="takeaways">
+          {% for t in item.key_takeaways %}<li>{{ t }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if item.url %}<a href="{{ item.url }}">Read full coverage →</a>{% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  {% endfor %}
+
+  {% if data.market_summary %}
+  <section>
+    <h2>Market Summary</h2>
+    {% for item in data.market_summary %}
+    <div class="story">
+      <h3>{{ item.headline }}</h3>
+      <div class="cat">{{ item.category }}</div>
+      {% if item.two_line %}<p class="twoline">{{ item.two_line }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if data.trending_topics %}
+  <section>
+    <h2>Trending Topics</h2>
+    <div class="chips">
+      {% for t in data.trending_topics %}<span>{{ t.topic }} · {{ t.count }}</span>{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if data.tomorrow_watchlist %}
+  <section>
+    <h2>Tomorrow's Watchlist</h2>
+    <ul class="watch">
+      {% for item in data.tomorrow_watchlist %}
+      <li><strong>{{ item.category }}:</strong> {{ item.headline }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <footer>
+    Generated autonomously by the AI News Intelligence Agent · Powered by GroqCloud + LangGraph
+  </footer>
+</div>
+</body>
+</html>
