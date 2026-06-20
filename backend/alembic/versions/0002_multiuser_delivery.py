@@ -1,4 +1,4 @@
-""multi-user briefing: user delivery config, report linkage, delivery logs
+"""multi-user briefing: user delivery config, report linkage, delivery logs
 
 Revision ID: 0002_multiuser_delivery
 Revises: 0001_initial

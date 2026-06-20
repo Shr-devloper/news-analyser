@@ -57,7 +57,7 @@ export default function LandingPage() {
           </ul>
         </div>
         <div className="text-sm text-brand-200">
-          Powered by FastAPI · LangGraph · Celery · Next.js
+          Powered by FastAPI · LangGraph · APScheduler · Next.js
         </div>
       </section>
 

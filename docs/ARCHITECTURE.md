@@ -2,26 +2,24 @@
 
 ## Overview
 
-The system is a monorepo with two deployable apps (`backend`, `frontend`) plus
-Celery workers, backed by PostgreSQL and Redis.
+The system is a monorepo with two deployable apps (`backend`, `frontend`) plus an
+APScheduler worker, backed by PostgreSQL. There is no Redis or Celery — scheduling
+runs in-process.
 
 ```
 ┌──────────┐   HTTP    ┌─────────────┐   SQL    ┌────────────┐
 │ Next.js  │ ───────► │  FastAPI    │ ──────► │ PostgreSQL │
 │ Dashboard│           │  REST API   │          └────────────┘
 └──────────┘           └─────────────┘                ▲
-                              │ enqueue                │
-                              ▼                        │
-                       ┌─────────────┐   tasks   ┌──────────┐
-                       │   Redis     │ ◄──────── │  Celery  │
-                       │  (broker)   │ ────────► │  worker  │
-                       └─────────────┘           └────┬─────┘
-                              ▲                        │ runs
-                       ┌──────┴──────┐                 ▼
-                       │ Celery Beat │          ┌──────────────┐
-                       │ (scheduler) │          │ LangGraph    │
-                       └─────────────┘          │ agent pipeline│
-                                                 └──────────────┘
+                                                       │ SQL
+                       ┌─────────────────┐  every 5m   │
+                       │  APScheduler    │ ────────────┤
+                       │  worker         │             │ runs
+                       │ (app/scheduler) │             ▼
+                       └─────────────────┘      ┌──────────────┐
+                                                │ LangGraph    │
+                                                │ agent pipeline│
+                                                └──────────────┘
 ```
 
 ## The agent pipeline (LangGraph)
@@ -59,13 +57,16 @@ run statistics and the generated `report_id`. If LangGraph can't be imported,
 
 ## Scheduling
 
-`app/core/celery_app.py` defines Beat entries:
-- `daily-news-pipeline` — 06:00 local (`REPORT_TIMEZONE`)
-- `weekly-recap` — Monday 08:00
-- `monthly-recap` — 1st of month 08:30
+`app/scheduler.py` builds an APScheduler instance with these jobs:
+- `dispatch_due_briefs` — every `SCHEDULER_INTERVAL_MINUTES` (default 5). Reads active
+  users, converts UTC→their timezone, and emails a fresh brief at their local 07:00,
+  de-duplicated via `email_delivery_logs`.
+- `weekly_recap` — Monday 08:00 (`REPORT_TIMEZONE`)
+- `monthly_recap` — 1st of month 08:30
 
-Granular per-stage tasks also exist for operators wanting the exact
-06:00→06:45 timetable.
+Run it as a dedicated worker (`python -m app.scheduler`) or embed it in the web
+process with `RUN_SCHEDULER_IN_WEB=true`. The job functions live in
+`app/tasks/pipeline.py` as plain callables (no broker).
 
 ## Extensibility
 

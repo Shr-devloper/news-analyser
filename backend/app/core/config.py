@@ -37,11 +37,6 @@ class Settings(BaseSettings):
     # ---- Database ----
     DATABASE_URL: str = "postgresql+psycopg://news:news@localhost:5432/news"
 
-    # ---- Redis / Celery ----
-    REDIS_URL: str = "redis://localhost:6379/0"
-    CELERY_BROKER_URL: str = "redis://localhost:6379/1"
-    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
-
     # ---- AI / GroqCloud ----
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
@@ -56,9 +51,13 @@ class Settings(BaseSettings):
     SMTP_FROM: str = "AI News Agent <no-reply@news.ai>"
     SMTP_TLS: bool = True
 
-    # ---- Scheduling ----
+    # ---- Scheduling (APScheduler — no broker/Redis) ----
     REPORT_TIMEZONE: str = "Asia/Kolkata"
-    ENABLE_BEAT: bool = True
+    ENABLE_SCHEDULER: bool = True            # master switch for the APScheduler worker
+    SCHEDULER_INTERVAL_MINUTES: int = 5      # how often to check for due users
+    # When true, the FastAPI web process ALSO runs the scheduler in a background
+    # thread (handy for single-service deploys). On Render we use a separate worker.
+    RUN_SCHEDULER_IN_WEB: bool = False
 
     # ---- Pipeline tuning ----
     MAX_ARTICLES_PER_SOURCE: int = 40
@@ -88,6 +87,18 @@ class Settings(BaseSettings):
     def _split_csv(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             return [o.strip() for o in v.split(",") if o.strip()]
+        return v
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _normalize_db_url(cls, v: str) -> str:
+        # Render/Heroku hand out `postgres://` or `postgresql://`; SQLAlchemy + psycopg3
+        # needs the `postgresql+psycopg://` driver scheme. Normalize it transparently.
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return "postgresql+psycopg://" + v[len("postgres://"):]
+            if v.startswith("postgresql://"):
+                return "postgresql+psycopg://" + v[len("postgresql://"):]
         return v
 
     @property

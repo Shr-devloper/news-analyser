@@ -20,22 +20,19 @@ def health():
 
 @router.get("/health/ready")
 def readiness(db: Session = Depends(get_db)):
-    checks = {"database": False, "redis": False}
+    checks = {"database": False}
     try:
         db.execute(text("SELECT 1"))
         checks["database"] = True
     except Exception:  # noqa: BLE001
         pass
-    try:
-        import redis
-
-        client = redis.from_url(settings.REDIS_URL)
-        client.ping()
-        checks["redis"] = True
-    except Exception:  # noqa: BLE001
-        pass
     ready = all(checks.values())
-    return {"ready": ready, "checks": checks, "groq_enabled": settings.groq_enabled}
+    return {
+        "ready": ready,
+        "checks": checks,
+        "scheduler_enabled": settings.ENABLE_SCHEDULER,
+        "groq_enabled": settings.groq_enabled,
+    }
 
 
 @router.get("/metrics")

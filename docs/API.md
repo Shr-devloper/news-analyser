@@ -70,5 +70,5 @@ curl -X POST localhost:8000/api/v1/auth/login \
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Liveness |
-| GET | `/api/v1/health/ready` | Readiness (DB + Redis) |
+| GET | `/api/v1/health/ready` | Readiness (DB) |
 | GET | `/api/v1/metrics` | Prometheus metrics |

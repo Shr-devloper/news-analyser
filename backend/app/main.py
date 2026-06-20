@@ -38,8 +38,21 @@ async def lifespan(app: FastAPI):
         log.warning("init_db_failed", error=str(exc))
     finally:
         db.close()
+
+    # Optionally run the APScheduler heartbeat inside the web process
+    # (single-service deploys). On Render we run a dedicated worker instead.
+    scheduler = None
+    if settings.ENABLE_SCHEDULER and settings.RUN_SCHEDULER_IN_WEB:
+        from app.scheduler import create_scheduler
+
+        scheduler = create_scheduler(blocking=False)
+        scheduler.start()
+        log.info("scheduler_started_in_web", interval_min=settings.SCHEDULER_INTERVAL_MINUTES)
+
     log.info("app_started", version=__version__, env=settings.ENVIRONMENT)
     yield
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
     log.info("app_stopping")
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import audit, require_admin
@@ -16,17 +16,18 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 @router.post("/pipeline/run")
 def run_pipeline_now(
     request: Request,
+    background: BackgroundTasks,
     send_email: bool = True,
     user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Queue the full daily pipeline as a Celery task (non-blocking)."""
+    """Run the full daily pipeline in a background thread (non-blocking, no broker)."""
     from app.tasks.pipeline import run_daily_pipeline
 
-    task = run_daily_pipeline.delay(send_email=send_email)
+    background.add_task(run_daily_pipeline, send_email=send_email)
     audit(db, user_id=user.id, action="pipeline.trigger", request=request,
-          detail={"task_id": task.id, "send_email": send_email})
-    return {"status": "queued", "task_id": task.id}
+          detail={"send_email": send_email})
+    return {"status": "started", "send_email": send_email}
 
 
 @router.get("/email-logs", response_model=list[EmailLogOut])

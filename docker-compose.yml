@@ -16,25 +16,12 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   backend:
     build: ./backend
     restart: unless-stopped
     env_file: .env
     depends_on:
       db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -45,38 +32,18 @@ services:
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
+  # Autonomous heartbeat: APScheduler checks every few minutes and emails due users.
   worker:
     build: ./backend
     restart: unless-stopped
     env_file: .env
     depends_on:
-      - backend
-      - redis
+      db:
+        condition: service_healthy
     volumes:
       - ./backend:/app
       - reports:/app/storage/reports
-    command: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=2
-
-  beat:
-    build: ./backend
-    restart: unless-stopped
-    env_file: .env
-    depends_on:
-      - backend
-      - redis
-    volumes:
-      - ./backend:/app
-    command: celery -A app.core.celery_app.celery_app beat --loglevel=info
-
-  flower:
-    build: ./backend
-    restart: unless-stopped
-    env_file: .env
-    depends_on:
-      - redis
-    ports:
-      - "5555:5555"
-    command: celery -A app.core.celery_app.celery_app flower --port=5555
+    command: python -m app.scheduler
 
   frontend:
     build: ./frontend

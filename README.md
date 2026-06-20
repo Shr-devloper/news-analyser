@@ -17,7 +17,7 @@ An autonomous, production-grade AI system that collects news from 12+ trusted so
 - **Automated email delivery** (Gmail/Outlook SMTP) with retries and delivery tracking.
 - **Next.js + Tailwind dashboard**: auth, preferences, historical reports, search/filter, downloads, analytics.
 - **JWT auth, RBAC, rate limiting, input validation, audit logs.**
-- **Celery + Celery Beat** scheduling, **Redis** broker, **PostgreSQL** storage.
+- **APScheduler** in-process scheduling (no broker), **PostgreSQL** storage.
 - **Docker Compose** one-command spin-up, **GitHub Actions** CI, health checks & metrics.
 
 ---
@@ -26,16 +26,16 @@ An autonomous, production-grade AI system that collects news from 12+ trusted so
 
 ```
                          ┌─────────────────────────────────────────┐
-                         │              Celery Beat                 │
-                         │   06:00 collect → 06:45 email (daily)    │
+                         │     APScheduler worker (every 5 min)     │
+                         │   per-user, per-timezone 07:00 delivery  │
                          └───────────────────┬─────────────────────┘
-                                             │ enqueue
+                                             │ calls in-process
                                              ▼
   RSS / HN ──► Agent1 Collector ──► Agent2 Dedup ──► Agent3 Classify ──► Agent4 Rank
                                                                             │
    Email ◄── Agent8 Email ◄── Agent7 Report ◄── Agent6 Briefing ◄── Agent5 Summarize
                                              │
-                                   PostgreSQL + Redis
+                                       PostgreSQL
                                              │
                               FastAPI  ◄──►  Next.js Dashboard
 ```
@@ -57,23 +57,25 @@ docker compose up --build
 | Frontend       | http://localhost:3000        |
 | Backend API    | http://localhost:8000        |
 | API Docs       | http://localhost:8000/docs   |
-| Flower (Celery)| http://localhost:5555        |
 
 A default admin user is created from `.env` (`FIRST_SUPERUSER_*`).
 
 ### Trigger the pipeline manually
 ```bash
 docker compose exec backend python -m app.cli run-pipeline      # build report only
-docker compose exec backend python -m app.cli send-brief        # build PDF + email it
+docker compose exec backend python -m app.cli dispatch          # send to any user due now
+docker compose exec backend python -m app.cli send-now --email supreetkhare2@gmail.com  # force one user
 ```
 
 ### 📨 Daily PDF Brief (autonomous)
-Every day at **07:00 AM IST** (`REPORT_TIMEZONE=Asia/Kolkata`) the agent collects the
-last 24h of news, ranks the **top 20** stories, writes a professional PDF
-(`Daily_News_Brief_YYYY_MM_DD.pdf` — cover page, table of contents, charts, source
-references, and a personalized *"What Should Shresth Pay Attention To Today?"* section)
-and **emails it** to `BRIEF_RECIPIENT_EMAIL` via Gmail SMTP. Reports are stored in
-PostgreSQL and `backend/storage/reports/`.
+An **APScheduler** worker checks every 5 minutes and, when a user's local **07:00**
+arrives, collects the last 24h of news, ranks the **top 25** stories, writes a fresh
+6–7 page professional PDF (`Daily_News_Brief_YYYY_MM_DD.pdf` with Executive Summary,
+World / India / Tech & AI / Business sections, a personalized *"What Should {Name} Pay
+Attention To Today?"* section, and run metadata) and **emails it** via Gmail SMTP.
+Delivery is de-duplicated per user/day via `email_delivery_logs`. Recipients live in
+the `users` table (Shresth → IST, Supreet → PST). Reports are stored in PostgreSQL and
+`backend/storage/reports/`.
 
 Groq model is configurable via `GROQ_MODEL` (`llama-3.3-70b-versatile`,
 `deepseek-r1-distill-llama-70b`, or `llama-3.1-8b-instant`).
@@ -91,9 +93,8 @@ python -m venv .venv && . .venv/Scripts/activate   # Windows
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
-# in separate shells:
-celery -A app.core.celery_app.celery_app worker -l info
-celery -A app.core.celery_app.celery_app beat -l info
+# in a separate shell — the autonomous scheduler (no broker needed):
+python -m app.scheduler
 ```
 
 Frontend:
@@ -112,12 +113,13 @@ All config is environment-driven. Copy `.env.example` → `.env`. Key vars:
 | Variable | Description |
 |----------|-------------|
 | `GROQ_API_KEY` | GroqCloud API key (LLM summaries/classification) |
-| `DATABASE_URL` | PostgreSQL DSN |
-| `REDIS_URL` | Redis broker/result backend |
+| `DATABASE_URL` | PostgreSQL DSN (`postgres://` auto-normalized) |
 | `SECRET_KEY` | JWT signing key |
 | `SMTP_HOST/PORT/USER/PASSWORD` | Email delivery |
 | `EMBEDDING_MODEL` | SentenceTransformers model name |
-| `REPORT_TIMEZONE` | Local time for the 07:00 schedule |
+| `REPORT_TIMEZONE` | Local time for recap jobs |
+| `SCHEDULER_INTERVAL_MINUTES` | How often the scheduler checks for due users (default 5) |
+| `RUN_SCHEDULER_IN_WEB` | Run APScheduler inside the web process (single-service deploy) |
 
 If `GROQ_API_KEY` is unset, the system gracefully falls back to deterministic heuristic summaries so the pipeline still runs end-to-end.
 
@@ -144,7 +146,7 @@ pytest -q
 
 ```
 .
-├── backend/      FastAPI + Celery + agents + AI layer
+├── backend/      FastAPI + APScheduler + agents + AI layer
 ├── frontend/     Next.js + Tailwind dashboard
 ├── docs/         Deployment, API, architecture
 ├── docker-compose.yml

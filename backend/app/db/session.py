@@ -34,7 +34,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 class session_scope:
-    """Context manager for use inside Celery tasks / scripts.
+    """Context manager for use inside scheduler jobs / scripts.
 
     Usage::
 

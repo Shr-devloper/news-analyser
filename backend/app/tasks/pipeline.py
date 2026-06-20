@@ -1,25 +1,22 @@
-"""Celery tasks: the autonomous daily workflow + recaps.
+"""The autonomous daily workflow — plain functions driven by APScheduler.
 
-The full pipeline runs as one task (``run_daily_pipeline``) so the agent stages
-share state and ordering. Individual stage tasks are also exposed for operators
-who want granular Beat scheduling per the 06:00–06:45 timetable.
+No Celery, no Redis, no broker. The scheduler (see ``app/scheduler.py``) calls
+``dispatch_due_briefs`` every few minutes; everything runs in-process.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from celery import shared_task
-
 from app.ai.graph import run_pipeline
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import session_scope
 
 log = get_logger(__name__)
 
 
-@shared_task(name="app.tasks.pipeline.run_daily_pipeline", bind=True, max_retries=2)
-def run_daily_pipeline(self, send_email: bool = True) -> dict:
+def run_daily_pipeline(send_email: bool = True) -> dict:
     """Collect → dedup → classify → rank → summarize → report → email (all recipients)."""
     try:
         with session_scope() as db:
@@ -28,10 +25,7 @@ def run_daily_pipeline(self, send_email: bool = True) -> dict:
         return stats
     except Exception as exc:  # noqa: BLE001
         log.error("daily_pipeline_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=120)
-
-
-DELIVERY_WINDOW_MINUTES = 5  # matches the Beat tick cadence
+        return {"error": str(exc)}
 
 
 def _delivered_today(db, user_id: int, local_date) -> bool:
@@ -54,32 +48,30 @@ def _ensure_fresh_core(db) -> dict:
     """Run collect -> dedup -> classify -> rank -> summarize so today's data is fresh."""
     from app.agents import classification, collector, deduplication, ranking, summarization
 
-    stats = {
+    return {
         "collect": collector.collect(db),
         "deduplicate": deduplication.deduplicate(db),
         "classify": classification.classify(db),
         "rank": ranking.rank(db),
         "summarize": summarization.summarize(db),
     }
-    return stats
 
 
-@shared_task(name="app.tasks.pipeline.dispatch_due_briefs", bind=True, max_retries=1)
-def dispatch_due_briefs(self) -> dict:
-    """Timezone-aware multi-user dispatcher (runs every 5 minutes via Beat).
+def dispatch_due_briefs() -> dict:
+    """Timezone-aware multi-user dispatcher (called every few minutes by APScheduler).
 
     For each active, briefing-enabled user: convert UTC -> their timezone; if the
     local time matches their delivery time and today's report hasn't been delivered
-    (per ``email_delivery_logs``), generate a FRESH report + PDF and email it.
-    DST-aware via zoneinfo. One delivery per user per local day.
+    (per ``email_delivery_logs``), fetch fresh news, generate a FRESH report + PDF,
+    and email it. DST-aware via zoneinfo. One delivery per user per local day.
     """
-    from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
     from app.agents import email as email_agent
     from app.agents import report as report_agent
     from app.db.models import User
 
+    window = settings.SCHEDULER_INTERVAL_MINUTES
     now_utc = datetime.now(timezone.utc)
     try:
         with session_scope() as db:
@@ -98,7 +90,7 @@ def dispatch_due_briefs(self) -> dict:
                 target = u.delivery_minute or 0
                 in_window = (
                     local.hour == u.delivery_hour
-                    and target <= local.minute < target + DELIVERY_WINDOW_MINUTES
+                    and target <= local.minute < target + window
                 )
                 if in_window and not _delivered_today(db, u.id, local.date()):
                     due.append((u, local))
@@ -106,7 +98,7 @@ def dispatch_due_briefs(self) -> dict:
             if not due:
                 return {"checked": len(users), "due": 0}
 
-            # Build today's data ONCE, then a personalized report per due user.
+            # Fetch fresh news ONCE, then a personalized report per due user.
             _ensure_fresh_core(db)
 
             results = []
@@ -123,68 +115,9 @@ def dispatch_due_briefs(self) -> dict:
             log.info("briefs_dispatched", due=len(due), sent=sent)
             return {"checked": len(users), "due": len(due), "sent": sent, "results": results}
     except Exception as exc:  # noqa: BLE001
+        # APScheduler will simply try again on the next tick — no broker retries needed.
         log.error("dispatch_due_briefs_failed", error=str(exc))
-        raise self.retry(exc=exc, countdown=120)
-
-
-# ---- Granular stage tasks (optional alternative to the combined pipeline) ----
-@shared_task(name="app.tasks.pipeline.collect_news")
-def collect_news() -> dict:
-    from app.agents import collector
-
-    with session_scope() as db:
-        return collector.collect(db)
-
-
-@shared_task(name="app.tasks.pipeline.deduplicate")
-def deduplicate() -> dict:
-    from app.agents import deduplication
-
-    with session_scope() as db:
-        return deduplication.deduplicate(db)
-
-
-@shared_task(name="app.tasks.pipeline.categorize")
-def categorize() -> dict:
-    from app.agents import classification
-
-    with session_scope() as db:
-        return classification.classify(db)
-
-
-@shared_task(name="app.tasks.pipeline.rank")
-def rank() -> dict:
-    from app.agents import ranking
-
-    with session_scope() as db:
-        return ranking.rank(db)
-
-
-@shared_task(name="app.tasks.pipeline.summarize")
-def summarize() -> dict:
-    from app.agents import summarization
-
-    with session_scope() as db:
-        return summarization.summarize(db)
-
-
-@shared_task(name="app.tasks.pipeline.generate_report")
-def generate_report() -> dict:
-    from app.agents import report as report_agent
-
-    with session_scope() as db:
-        report = report_agent.generate(db, kind="daily")
-        return {"report_id": report.id}
-
-
-@shared_task(name="app.tasks.pipeline.send_emails")
-def send_emails(report_id: int) -> dict:
-    from app.agents import email as email_agent
-    from app.db.models import Report
-
-    with session_scope() as db:
-        report = db.get(Report, report_id)
-        return email_agent.send_reports(db, report)
+        return {"error": str(exc)}
 
 
 # ---- Recaps (AI feature: weekly / monthly) ----
@@ -199,7 +132,6 @@ def _recap(kind: str, days: int) -> dict:
             .filter(Report.kind == "daily", Report.report_date >= since)
             .all()
         )
-        # A recap re-summarizes the period's top events via the report agent.
         report = report_agent.generate(db, kind=kind)
         report.title = f"{kind.capitalize()} Recap — {datetime.now(timezone.utc):%d %b %Y}"
         report.data = (report.data or {}) | {"recap_window_days": days, "daily_reports": len(recent)}
@@ -207,11 +139,9 @@ def _recap(kind: str, days: int) -> dict:
         return {"report_id": report.id, "kind": kind, "daily_reports": len(recent)}
 
 
-@shared_task(name="app.tasks.pipeline.generate_weekly_recap")
 def generate_weekly_recap() -> dict:
     return _recap("weekly", 7)
 
 
-@shared_task(name="app.tasks.pipeline.generate_monthly_recap")
 def generate_monthly_recap() -> dict:
     return _recap("monthly", 30)

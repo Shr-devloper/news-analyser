@@ -22,12 +22,12 @@ GROQ_MODEL=llama-3.3-70b-versatile   # or deepseek-r1-distill-llama-70b / llama-
 ```
 
 ### How multi-timezone delivery works
-A Celery Beat job (`dispatch_due_briefs`) ticks every 30 minutes. For each
-recipient it checks whether it's currently their local send-hour (e.g. 7 AM IST
-or 7 AM PST); if so — and they haven't already been emailed today — it generates
-a **fresh** report and sends it to them. Timezones (incl. daylight saving) are
-resolved with `zoneinfo`, and a per-recipient daily guard prevents duplicates.
-Add as many recipients/timezones as you like by extending `BRIEF_RECIPIENTS`.
+An **APScheduler** job (`dispatch_due_briefs`) ticks every 5 minutes (no Redis/Celery).
+It reads active users from the `users` table and, for each, checks whether it's their
+local delivery time (e.g. 7 AM IST or 7 AM PST); if so — and they haven't already been
+emailed today (`email_delivery_logs`) — it fetches fresh news and sends them a brand-new
+report. Timezones (incl. daylight saving) are resolved with `zoneinfo`. Recipients are
+seeded from `app/db/init_db.py:BRIEFING_USERS`; add more by inserting `users` rows.
 
 ## 2. Gmail SMTP (App Password)
 
@@ -62,7 +62,8 @@ Set `GROQ_MODEL` to one of:
 ```bash
 docker compose up --build
 ```
-`beat` schedules the daily brief; `worker` runs it; the PDF is emailed automatically.
+The `worker` service runs APScheduler, which builds and emails each user's PDF at their
+local 7 AM automatically — no broker required.
 
 ### Send a brief right now (any environment)
 ```bash

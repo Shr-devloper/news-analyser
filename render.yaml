@@ -1,0 +1,96 @@
+# Render Blueprint — AI News Intelligence Agent (no Redis / no Celery)
+#
+#   Render PostgreSQL  ->  FastAPI Web Service  +  Background Worker (APScheduler)
+#                                   |                       |
+#                                GroqCloud              Gmail SMTP
+#
+# Deploy: push this repo to GitHub, then in Render: New + > Blueprint > pick the repo.
+# Set the secret env vars (GROQ_API_KEY, EMAIL_USER, EMAIL_PASSWORD) in the dashboard.
+
+databases:
+  - name: news-db
+    plan: free
+    databaseName: news
+    user: news
+
+services:
+  # ---- FastAPI web service (API + dashboard backend) ----
+  - type: web
+    name: news-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: news-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: ENABLE_SCHEDULER
+        value: "false"            # the dedicated worker runs the scheduler
+      - key: RUN_SCHEDULER_IN_WEB
+        value: "false"
+      - key: REPORT_TIMEZONE
+        value: Asia/Kolkata
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_TLS
+        value: "true"
+      - key: SMTP_USER
+        sync: false               # set in dashboard (your Gmail address)
+      - key: SMTP_PASSWORD
+        sync: false               # set in dashboard (Gmail App Password)
+      - key: SMTP_FROM
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+
+  # ---- Background worker: APScheduler heartbeat (the autonomous part) ----
+  - type: worker
+    name: news-scheduler
+    runtime: python
+    plan: starter            # workers don't have a free tier; needs to stay always-on
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python -m app.scheduler"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: news-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: ENABLE_SCHEDULER
+        value: "true"
+      - key: SCHEDULER_INTERVAL_MINUTES
+        value: "5"
+      - key: REPORT_TIMEZONE
+        value: Asia/Kolkata
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_TLS
+        value: "true"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile

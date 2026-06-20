@@ -18,10 +18,8 @@ psycopg[binary]==3.2.3
 alembic==1.14.0
 pgvector==0.3.6
 
-# ---- Async tasks ----
-celery==5.4.0
-redis==5.2.1
-flower==2.0.1
+# ---- Scheduling (in-process, no broker) ----
+apscheduler==3.11.0
 
 # ---- News sources ----
 feedparser==6.0.11

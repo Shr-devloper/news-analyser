@@ -1,4 +1,4 @@
-"""Structured JSON logging via structlog, shared by API and Celery workers."""
+"""Structured JSON logging via structlog, shared by the API and scheduler worker."""
 
 from __future__ import annotations
 
