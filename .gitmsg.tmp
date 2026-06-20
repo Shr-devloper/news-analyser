@@ -1,6 +1,0 @@
-Replace Celery/Redis with APScheduler for autonomous delivery
-
-Remove Celery Beat, Redis broker, and flower; scheduling now runs
-in-process via APScheduler with a dedicated worker (python -m app.scheduler).
-Add render.yaml blueprint for Render (Postgres + web + scheduler worker),
-update docker-compose, health checks, docs, and requirements.
