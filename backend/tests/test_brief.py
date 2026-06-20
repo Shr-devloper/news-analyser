@@ -48,11 +48,101 @@ def test_brief_pdf_generated(db_session):
 
     # Structured payload contains the required sections
     data = report.data
-    assert "top_20" in data
-    assert set(["Top Global News", "India News", "Technology & AI", "Business & Markets"]).issubset(
+    assert "top_25" in data
+    assert len(data["top_25"]) <= 25
+    assert set(["World News", "India News", "Technology & AI", "Business & Markets"]).issubset(
         data["sections"].keys()
     )
-    assert data["personalized"]["title"] == "What Should Shresth Pay Attention To Today?"
+    assert data["personalized"]["title"] == "What Should You Pay Attention To Today?"
+    # Run metadata must be present for every report.
+    assert "metadata" in data and "articles_processed" in data["metadata"]
+    assert report.report_uid and report.report_uid.startswith("RPT-")
+
+
+def test_brief_recipients_parsing():
+    from app.core.config import Settings
+
+    s = Settings(
+        BRIEF_RECIPIENTS=(
+            "a@x.com|Asia/Kolkata|Asha|7;b@y.com|America/Los_Angeles|Bob|6"
+        )
+    )
+    recips = s.brief_recipients
+    assert len(recips) == 2
+    assert recips[0] == {"email": "a@x.com", "timezone": "Asia/Kolkata", "name": "Asha", "hour": 7}
+    assert recips[1]["timezone"] == "America/Los_Angeles"
+    assert recips[1]["hour"] == 6
+
+
+def test_brief_recipients_fallback_single():
+    from app.core.config import Settings
+
+    s = Settings(BRIEF_RECIPIENTS="", BRIEF_RECIPIENT_EMAIL="solo@x.com",
+                 BRIEF_RECIPIENT_NAME="Solo", REPORT_TIMEZONE="Asia/Kolkata")
+    recips = s.brief_recipients
+    assert len(recips) == 1
+    assert recips[0]["email"] == "solo@x.com"
+    assert recips[0]["timezone"] == "Asia/Kolkata"
+
+
+def _make_event(db, *, title, hours_ago, score, category="World"):
+    from datetime import timedelta
+
+    from app.db.models import ArticleCategory, DeduplicatedEvent, Ranking, Summary
+
+    ev = DeduplicatedEvent(
+        canonical_title=title, canonical_url=f"http://x/{abs(hash(title))}",
+        publisher_count=2, event_date=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+    )
+    db.add(ev)
+    db.flush()
+    db.add(Summary(event_id=ev.id, headline=title, two_line="A two line summary.",
+                   why_it_matters="It matters."))
+    db.add(Ranking(event_id=ev.id, score=score))
+    db.add(ArticleCategory(event_id=ev.id, category=category, is_primary=True))
+    db.commit()
+    return ev
+
+
+def test_user_report_excludes_stale_events(db_session):
+    from app.db.models import User
+
+    fresh = _make_event(db_session, title="FRESH world story today", hours_ago=2, score=90)
+    stale = _make_event(db_session, title="STALE story from days ago", hours_ago=72, score=99)
+
+    user = User(email="u1@test.com", full_name="Test User", hashed_password="x",
+                timezone="Asia/Kolkata", delivery_hour=7, interests=["AI"], briefing_enabled=True)
+    db_session.add(user)
+    db_session.commit()
+
+    report = report_agent.build_user_report(db_session, user)
+    ids = {s["id"] for s in report.data["top_25"]}
+    assert fresh.id in ids
+    assert stale.id not in ids  # stale (>24h) events must never be reused
+    assert report.user_id == user.id
+    assert report.data["personalized"]["title"] == "What Should Test Pay Attention To Today?"
+    # report_articles snapshot persisted
+    assert len(report.articles) >= 1
+
+
+def test_delivery_log_dedup(db_session):
+    from datetime import date
+
+    from app.db.models import User
+    from app.tasks.pipeline import _delivered_today
+
+    user = User(email="dedupe@test.com", full_name="Dee", hashed_password="x",
+                timezone="UTC", delivery_hour=7, interests=[], briefing_enabled=True)
+    db_session.add(user)
+    db_session.commit()
+
+    today = date(2026, 6, 20)
+    assert _delivered_today(db_session, user.id, today) is False
+    from app.db.models import EmailDeliveryLog
+
+    db_session.add(EmailDeliveryLog(user_id=user.id, delivery_date=today, status="sent"))
+    db_session.commit()
+    assert _delivered_today(db_session, user.id, today) is True
 
 
 def test_brief_email_body():

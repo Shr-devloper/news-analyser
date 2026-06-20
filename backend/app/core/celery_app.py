@@ -45,12 +45,13 @@ celery_app.conf.update(
 
 if settings.ENABLE_BEAT:
     celery_app.conf.beat_schedule = {
-        "daily-news-brief": {
-            "task": "app.tasks.pipeline.run_daily_pipeline",
-            # 07:00 local time (REPORT_TIMEZONE=Asia/Kolkata -> 7:00 AM IST).
-            # The pipeline collects, ranks, summarizes, builds the PDF and emails it.
-            "schedule": crontab(hour=7, minute=0),
-            "kwargs": {"send_email": True},
+        "dispatch-daily-briefs": {
+            # Ticks every 5 minutes. The task reads active users from the DB,
+            # converts UTC to each user's timezone, and emails a FRESH brief to any
+            # user whose local delivery time has arrived (e.g. 7 AM IST, 7 AM PST).
+            # DST-aware via zoneinfo; email_delivery_logs guarantees one send/user/day.
+            "task": "app.tasks.pipeline.dispatch_due_briefs",
+            "schedule": crontab(minute="*/5"),
         },
         "weekly-recap": {
             "task": "app.tasks.pipeline.generate_weekly_recap",

@@ -16,6 +16,11 @@ htmlcov/
 .env.*
 !.env.example
 
+# Local SQLite dev database (not for version control)
+*.db
+*.sqlite
+*.sqlite3
+
 # Node / Next
 node_modules/
 .next/

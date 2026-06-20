@@ -52,17 +52,64 @@ def _brief_bodies(report: Report, name: str) -> tuple[str, str]:
     return plain, html
 
 
-def send_daily_brief(db: Session, report: Report) -> dict:
-    """Email the branded PDF report to the configured single recipient (per spec)."""
-    recipient = settings.BRIEF_RECIPIENT_EMAIL
-    name = settings.BRIEF_RECIPIENT_NAME
+def send_user_brief(db: Session, user, report: Report, *, delivery_date, local_time: str) -> dict:
+    """Deliver the brief PDF to a DB user and write an EmailDeliveryLog (dedupe ledger).
+
+    The ``email_delivery_logs`` unique (user_id, delivery_date) row is the guard
+    that guarantees at most one delivery per user per local day.
+    """
+    from app.db.models import EmailDeliveryLog
+
+    name = (user.full_name or user.email.split("@")[0]).split(" ")[0]
     date_str = report.report_date.strftime("%d %B %Y")
     subject = f"Daily AI News Intelligence Report - {date_str}"
     plain, html = _brief_bodies(report, name)
 
-    record = EmailLog(
-        report_id=report.id, recipient=recipient, subject=subject, status="pending"
+    record = (
+        db.query(EmailDeliveryLog)
+        .filter(EmailDeliveryLog.user_id == user.id, EmailDeliveryLog.delivery_date == delivery_date)
+        .first()
     )
+    if record is None:
+        record = EmailDeliveryLog(
+            user_id=user.id, delivery_date=delivery_date, delivery_time=local_time, status="pending"
+        )
+        db.add(record)
+    record.report_id = report.id
+    db.flush()
+
+    if not is_configured():
+        record.status = "failed"
+        record.error = "SMTP not configured"
+        db.commit()
+        log.warning("user_brief_smtp_unconfigured", user=user.email)
+        return {"user": user.email, "sent": False, "reason": "smtp_unconfigured"}
+
+    display_name = f"Daily_News_Brief_{report.report_date.strftime('%Y_%m_%d')}.pdf"
+    attachments = [(report.pdf_path, display_name)] if report.pdf_path else []
+    try:
+        attempts = send_email(user.email, subject, html, text=plain, attachments=attachments)
+        record.status = "sent"
+        record.attempts = attempts
+        db.commit()
+        log.info("user_brief_sent", user=user.email, attempts=attempts, report_id=report.id)
+        return {"user": user.email, "sent": True, "attempts": attempts}
+    except EmailDeliveryError as exc:
+        record.status = "failed"
+        record.attempts = 3
+        record.error = str(exc)
+        db.commit()
+        log.error("user_brief_failed", user=user.email, error=str(exc))
+        return {"user": user.email, "sent": False, "reason": str(exc)}
+
+
+def send_brief_to(db: Session, report: Report, *, email: str, name: str) -> dict:
+    """Email the branded PDF report to a single recipient. Logs delivery."""
+    date_str = report.report_date.strftime("%d %B %Y")
+    subject = f"Daily AI News Intelligence Report - {date_str}"
+    plain, html = _brief_bodies(report, name)
+
+    record = EmailLog(report_id=report.id, recipient=email, subject=subject, status="pending")
     db.add(record)
     db.flush()
 
@@ -70,25 +117,37 @@ def send_daily_brief(db: Session, report: Report) -> dict:
         record.status = "failed"
         record.error = "SMTP not configured"
         db.commit()
-        log.warning("daily_brief_not_sent_smtp_unconfigured", recipient=recipient)
-        return {"sent": False, "reason": "smtp_unconfigured"}
+        log.warning("daily_brief_not_sent_smtp_unconfigured", recipient=email)
+        return {"recipient": email, "sent": False, "reason": "smtp_unconfigured"}
 
     attachments = [report.pdf_path] if report.pdf_path else []
     try:
-        attempts = send_email(recipient, subject, html, text=plain, attachments=attachments)
+        attempts = send_email(email, subject, html, text=plain, attachments=attachments)
         record.status = "sent"
         record.attempts = attempts
         record.sent_at = datetime.now(timezone.utc)
         db.commit()
-        log.info("daily_brief_sent", recipient=recipient, attempts=attempts)
-        return {"sent": True, "recipient": recipient, "attempts": attempts}
+        log.info("daily_brief_sent", recipient=email, attempts=attempts)
+        return {"recipient": email, "sent": True, "attempts": attempts}
     except EmailDeliveryError as exc:
         record.status = "failed"
         record.attempts = 3
         record.error = str(exc)
         db.commit()
-        log.error("daily_brief_failed", recipient=recipient, error=str(exc))
-        return {"sent": False, "reason": str(exc)}
+        log.error("daily_brief_failed", recipient=email, error=str(exc))
+        return {"recipient": email, "sent": False, "reason": str(exc)}
+
+
+def send_daily_brief(db: Session, report: Report, recipients: list[dict] | None = None) -> dict:
+    """Email the branded PDF to all configured recipients (default: every recipient)."""
+    recipients = recipients or settings.brief_recipients
+    results = [
+        send_brief_to(db, report, email=r["email"], name=r.get("name") or r["email"])
+        for r in recipients
+    ]
+    sent = sum(1 for r in results if r.get("sent"))
+    log.info("daily_brief_batch", total=len(results), sent=sent)
+    return {"recipients": len(results), "sent": sent, "results": results}
 
 
 def send_reports(db: Session, report: Report) -> dict:

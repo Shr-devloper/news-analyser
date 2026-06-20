@@ -41,13 +41,20 @@ def _build_message(
     body.attach(MIMEText(html, "html"))
     outer.attach(body)
 
-    for path in attachments or []:
+    for item in attachments or []:
+        # Each item is a path, or a (path, display_name) tuple.
+        if isinstance(item, (tuple, list)):
+            path, display = item[0], item[1]
+        else:
+            path, display = item, None
         if not path or not os.path.exists(path):
             log.warning("attachment_missing", path=path)
             continue
         with open(path, "rb") as fh:
             part = MIMEApplication(fh.read(), _subtype="pdf")
-        part.add_header("Content-Disposition", "attachment", filename=os.path.basename(path))
+        part.add_header(
+            "Content-Disposition", "attachment", filename=display or os.path.basename(path)
+        )
         outer.attach(part)
     return outer
 

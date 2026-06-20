@@ -16,6 +16,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -43,10 +44,18 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # --- Briefing delivery config (drives the autonomous multi-user scheduler) ---
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    delivery_hour: Mapped[int] = mapped_column(Integer, default=7)
+    delivery_minute: Mapped[int] = mapped_column(Integer, default=0)
+    interests: Mapped[list] = mapped_column(JSON, default=list)
+    briefing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
     preferences: Mapped["UserPreference"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
     email_logs: Mapped[list["EmailLog"]] = relationship(back_populates="user")
+    delivery_logs: Mapped[list["EmailDeliveryLog"]] = relationship(back_populates="user")
 
 
 class UserPreference(Base, TimestampMixin):
@@ -198,6 +207,11 @@ class Report(Base, TimestampMixin):
     __tablename__ = "reports"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Per-user reports carry the recipient; shared/dashboard reports leave it null.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    report_uid: Mapped[str | None] = mapped_column(String(64), index=True)
     report_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     title: Mapped[str] = mapped_column(String(255))
     kind: Mapped[str] = mapped_column(String(32), default="daily")  # daily | weekly | monthly
@@ -208,8 +222,36 @@ class Report(Base, TimestampMixin):
     pdf_path: Mapped[str | None] = mapped_column(String(512))
     markdown_path: Mapped[str | None] = mapped_column(String(512))
     event_count: Mapped[int] = mapped_column(Integer, default=0)
+    articles_processed: Mapped[int] = mapped_column(Integer, default=0)
+    sources_used: Mapped[list | None] = mapped_column(JSON)
 
     email_logs: Mapped[list["EmailLog"]] = relationship(back_populates="report")
+    articles: Mapped[list["ReportArticle"]] = relationship(
+        back_populates="report", cascade="all, delete-orphan"
+    )
+    delivery_logs: Mapped[list["EmailDeliveryLog"]] = relationship(back_populates="report")
+
+
+class ReportArticle(Base, TimestampMixin):
+    """Snapshot of each story included in a report (decouples report from live data)."""
+
+    __tablename__ = "report_articles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("reports.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("deduplicated_events.id", ondelete="SET NULL")
+    )
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    section: Mapped[str | None] = mapped_column(String(64))
+    category: Mapped[str | None] = mapped_column(String(64))
+    headline: Mapped[str] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+
+    report: Mapped["Report"] = relationship(back_populates="articles")
 
 
 class EmailLog(Base, TimestampMixin):
@@ -227,6 +269,27 @@ class EmailLog(Base, TimestampMixin):
 
     user: Mapped["User"] = relationship(back_populates="email_logs")
     report: Mapped["Report"] = relationship(back_populates="email_logs")
+
+
+class EmailDeliveryLog(Base, TimestampMixin):
+    """Per-user, per-day delivery ledger — the source of truth for de-duplicating sends."""
+
+    __tablename__ = "email_delivery_logs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "delivery_date", name="uq_delivery_user_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    report_id: Mapped[int | None] = mapped_column(ForeignKey("reports.id", ondelete="SET NULL"))
+    delivery_date: Mapped[Date] = mapped_column(Date, index=True)  # user's LOCAL date
+    delivery_time: Mapped[str | None] = mapped_column(String(32))  # local time string
+    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|sent|failed
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    user: Mapped["User"] = relationship(back_populates="delivery_logs")
+    report: Mapped["Report"] = relationship(back_populates="delivery_logs")
 
 
 # --------------------------------------------------------------------------- #

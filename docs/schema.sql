@@ -13,6 +13,12 @@ CREATE TABLE users (
     role            VARCHAR(32) DEFAULT 'user',
     is_active       BOOLEAN DEFAULT TRUE,
     last_login_at   TIMESTAMPTZ,
+    -- Briefing delivery config (read by the timezone scheduler every 5 min):
+    timezone         VARCHAR(64) DEFAULT 'Asia/Kolkata',
+    delivery_hour    INTEGER DEFAULT 7,
+    delivery_minute  INTEGER DEFAULT 0,
+    interests        JSONB,
+    briefing_enabled BOOLEAN DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -122,20 +128,43 @@ CREATE TABLE summaries (
 );
 
 CREATE TABLE reports (
-    id                SERIAL PRIMARY KEY,
-    report_date       TIMESTAMPTZ NOT NULL,
-    title             VARCHAR(255) NOT NULL,
-    kind              VARCHAR(32) DEFAULT 'daily',
-    executive_summary TEXT,
-    data              JSONB,
-    html_path         VARCHAR(512),
-    pdf_path          VARCHAR(512),
-    markdown_path     VARCHAR(512),
-    event_count       INTEGER DEFAULT 0,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                 SERIAL PRIMARY KEY,
+    user_id            INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- per-user report (null = shared)
+    report_uid         VARCHAR(64),                                       -- e.g. RPT-20260620-070003-ab12cd
+    report_date        TIMESTAMPTZ NOT NULL,
+    title              VARCHAR(255) NOT NULL,
+    kind               VARCHAR(32) DEFAULT 'daily',
+    executive_summary  TEXT,
+    data               JSONB,
+    html_path          VARCHAR(512),
+    pdf_path           VARCHAR(512),
+    markdown_path      VARCHAR(512),
+    event_count        INTEGER DEFAULT 0,
+    articles_processed INTEGER DEFAULT 0,
+    sources_used       JSONB,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ix_reports_date ON reports(report_date);
+CREATE INDEX ix_reports_user_id ON reports(user_id);
+CREATE INDEX ix_reports_report_uid ON reports(report_uid);
+
+-- Story-cluster snapshots included in a report (decouples report from live data).
+-- NOTE: deduplicated_events above IS the "story_clusters" concept referenced in docs.
+CREATE TABLE report_articles (
+    id         SERIAL PRIMARY KEY,
+    report_id  INTEGER REFERENCES reports(id) ON DELETE CASCADE,
+    event_id   INTEGER REFERENCES deduplicated_events(id) ON DELETE SET NULL,
+    rank       INTEGER DEFAULT 0,
+    score      DOUBLE PRECISION DEFAULT 0,
+    section    VARCHAR(64),
+    category   VARCHAR(64),
+    headline   TEXT NOT NULL,
+    url        TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_report_articles_report_id ON report_articles(report_id);
 
 CREATE TABLE email_logs (
     id         SERIAL PRIMARY KEY,
@@ -150,6 +179,23 @@ CREATE TABLE email_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Per-user, per-day delivery ledger — the dedupe guard for the scheduler.
+CREATE TABLE email_delivery_logs (
+    id            SERIAL PRIMARY KEY,
+    user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    report_id     INTEGER REFERENCES reports(id) ON DELETE SET NULL,
+    delivery_date DATE,                       -- the user's LOCAL date
+    delivery_time VARCHAR(32),                -- local time string, e.g. "07:00 IST"
+    status        VARCHAR(32) DEFAULT 'pending',  -- pending | sent | failed
+    attempts      INTEGER DEFAULT 0,
+    error         TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_delivery_user_date UNIQUE (user_id, delivery_date)
+);
+CREATE INDEX ix_delivery_user_id ON email_delivery_logs(user_id);
+CREATE INDEX ix_delivery_date ON email_delivery_logs(delivery_date);
 
 CREATE TABLE audit_logs (
     id         SERIAL PRIMARY KEY,

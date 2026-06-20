@@ -10,9 +10,9 @@ Copy `.env.example` → `.env` (root, for Docker) and/or edit `backend/.env`
 (for local runs). Key values for the brief:
 
 ```dotenv
-BRIEF_RECIPIENT_EMAIL=shresth.t.123@gmail.com
-BRIEF_RECIPIENT_NAME=Shresth
-REPORT_TIMEZONE=Asia/Kolkata        # makes 07:00 = 7 AM IST
+# Multiple recipients — each emailed at 7 AM in THEIR OWN timezone.
+# Format per recipient: email|timezone|name|hour  (entries separated by ";")
+BRIEF_RECIPIENTS=shresth.t.123@gmail.com|Asia/Kolkata|Shresth|7;friend@example.com|America/Los_Angeles|Friend|7
 TOP_STORIES_OVERALL=20
 FETCH_WINDOW_HOURS=24
 
@@ -20,6 +20,14 @@ FETCH_WINDOW_HOURS=24
 GROQ_API_KEY=gsk_xxx
 GROQ_MODEL=llama-3.3-70b-versatile   # or deepseek-r1-distill-llama-70b / llama-3.1-8b-instant
 ```
+
+### How multi-timezone delivery works
+A Celery Beat job (`dispatch_due_briefs`) ticks every 30 minutes. For each
+recipient it checks whether it's currently their local send-hour (e.g. 7 AM IST
+or 7 AM PST); if so — and they haven't already been emailed today — it generates
+a **fresh** report and sends it to them. Timezones (incl. daylight saving) are
+resolved with `zoneinfo`, and a per-recipient daily guard prevents duplicates.
+Add as many recipients/timezones as you like by extending `BRIEF_RECIPIENTS`.
 
 ## 2. Gmail SMTP (App Password)
 

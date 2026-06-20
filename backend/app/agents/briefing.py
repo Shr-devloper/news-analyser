@@ -7,9 +7,12 @@ between the interest text and event centroids, blended with importance score.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy.orm import Session
 
 from app.ai.embeddings import cosine_similarity, embed_text
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.models import DeduplicatedEvent, Ranking
 
@@ -41,10 +44,12 @@ def build_personalized(
     if not interests:
         return []
 
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.FETCH_WINDOW_HOURS)
     events = (
         db.query(DeduplicatedEvent)
         .join(Ranking, Ranking.event_id == DeduplicatedEvent.id)
         .filter(DeduplicatedEvent.summary.has())
+        .filter(DeduplicatedEvent.event_date >= cutoff)
         .order_by(Ranking.score.desc())
         .limit(120)
         .all()
